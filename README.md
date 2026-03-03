@@ -8,7 +8,7 @@ Built as a Final Year Project demonstrating applied NLP, semantic similarity, fu
 
 ## Demo
 
-![Dashboard Preview](assets/dashboard_preview.png)
+![Dashboard Preview](Dashboard.png)
 
 > Upload a job description + resume PDFs → get ranked candidates with skill breakdowns, radar charts, and hiring recommendations in seconds.
 
