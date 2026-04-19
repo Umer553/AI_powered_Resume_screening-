@@ -1,0 +1,55 @@
+# ============================================================
+# AI-Powered Resume Screening System
+# Requirements File — Complete & Verified
+# Install: pip install -r requirements.txt
+# ============================================================
+
+
+# ── PDF Parsing ──────────────────────────────────────────────
+pdfplumber                  # primary PDF text extraction
+pymupdf                     # fallback PDF parsing (fitz)
+pdf2image                   # converts PDF pages to images for OCR
+pytesseract                 # OCR wrapper for Tesseract
+
+
+# ── NLP & Named Entity Recognition ───────────────────────────
+spacy                       # NER for name extraction
+# After install run: python -m spacy download en_core_web_sm
+
+
+# ── Embeddings & Semantic Similarity ─────────────────────────
+sentence-transformers       # MiniLM model for semantic scoring
+torch                       # required backend for sentence-transformers
+
+
+# ── Fuzzy Matching ────────────────────────────────────────────
+rapidfuzz                   # skill fuzzy matching (faster than fuzzywuzzy)
+
+
+# ── Date Parsing ─────────────────────────────────────────────
+python-dateutil             # robust multi-format date parser
+
+
+# ── Data Handling ─────────────────────────────────────────────
+pandas                      # DataFrame for results + CSV export
+numpy                       # numerical operations
+
+
+# ── Dashboard & Visualization ────────────────────────────────
+streamlit                   # dashboard UI
+plotly                      # radar charts, histograms, donut charts
+
+
+# ── HTTP (LLM domain detection fallback) ─────────────────────
+requests                    # Anthropic API call in domain_config.py
+
+
+# ── Standard Library (no install needed) ─────────────────────
+# os, re, json, csv, math, hashlib, pickle, pathlib,
+# datetime, dataclasses, concurrent.futures
+# These ship with Python — do NOT add them here
+
+
+# ── NOT needed (remove from old requirements) ─────────────────
+# nltk          — not used anywhere in current codebase
+# scikit-learn  — not used (rapidfuzz replaced sklearn cosine)

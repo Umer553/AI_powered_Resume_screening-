@@ -1,0 +1,23 @@
+# Virtual environment
+.venv/
+
+# Cache (large embedding files)
+cache/
+
+# Temp uploads
+temp_uploads/
+
+# Output results (optional — remove if you want to include sample outputs)
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Resume data (likely too large for GitHub)
+resumes/
