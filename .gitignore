@@ -7,17 +7,33 @@ cache/
 # Temp uploads
 temp_uploads/
 
-# Output results (optional — remove if you want to include sample outputs)
+# Output results
 outputs/
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Resume data (likely too large for GitHub)
+# Resume data (too large for GitHub)
 resumes/
+
+# Claude Code internals
+.claude/
+graphify-out/
+
+# Internal documents
+*.docx
+*.doc
+
+# Secrets / env
+.env
+.env.*

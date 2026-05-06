@@ -151,6 +151,10 @@ def extract_candidate_info(text: str, parsed_confidence: float = 1.0) -> dict:
         "linkedin":         contact.get("linkedin"),
         "github":           contact.get("github"),
 
+        # Phase 2: BERT multi-entity fields
+        "location":         contact.get("location"),
+        "companies":        contact.get("companies", []),
+
         # Skills
         "skills":           skills,
         "skill_count":      len(skills),
@@ -170,6 +174,7 @@ def _empty_result() -> dict:
     return {
         "name": None, "name_confidence": 0.0, "name_source": "failed",
         "email": None, "phone": None, "linkedin": None, "github": None,
+        "location": None, "companies": [],
         "skills": [], "skill_count": 0,
         "experience_years_fallback": 0.0, "experience_years": None,
         "role_experience": {}, "parse_confidence": 0.0, "needs_review": True,

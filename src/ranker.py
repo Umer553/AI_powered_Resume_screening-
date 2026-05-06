@@ -29,6 +29,8 @@ class CandidateResult:
     phone:              str
     linkedin:           str
     github:             str
+    location:           str
+    companies:          list
 
     # Scores (all 0.0 - 1.0 internally)
     final_score:        float
@@ -123,6 +125,8 @@ def process_single_resume(
             phone              = info.get("phone")    or "N/A",
             linkedin           = info.get("linkedin") or "N/A",
             github             = info.get("github")   or "N/A",
+            location           = info.get("location") or "N/A",
+            companies          = info.get("companies", []),
 
             final_score        = match["final_score"],
             semantic_score     = match["semantic_score"],
@@ -255,6 +259,8 @@ def _export_csv(results: list, path: str):
             "Name":             r.name,
             "Email":            r.email,
             "Phone":            r.phone,
+            "Location":         r.location,
+            "Companies":        ", ".join(r.companies) if r.companies else "N/A",
             "Final Score %":    round(r.final_score     * 100, 1),
             "Semantic %":       round(r.semantic_score  * 100, 1),
             "Skill %":          round(r.skill_score     * 100, 1),

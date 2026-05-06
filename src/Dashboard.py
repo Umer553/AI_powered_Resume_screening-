@@ -228,6 +228,25 @@ h1,h2,h3 { font-family: 'Syne', sans-serif; }
     border-bottom: 2px solid var(--accent) !important;
 }
 hr { border-color: var(--border) !important; }
+.ner-badge {
+    display: inline-block;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.58rem; letter-spacing: 0.1em;
+    padding: 0.15rem 0.5rem; border-radius: 2px;
+    margin-left: 0.4rem; vertical-align: middle;
+}
+.ner-bert   { background: rgba(75,232,184,0.12); color: var(--hire);   border: 1px solid rgba(75,232,184,0.25); }
+.ner-spacy  { background: rgba(232,184,75,0.12); color: var(--maybe);  border: 1px solid rgba(232,184,75,0.25); }
+.ner-heur   { background: rgba(107,107,128,0.15); color: var(--muted); border: 1px solid rgba(107,107,128,0.2); }
+.company-chip {
+    display: inline-block;
+    background: rgba(75,139,232,0.1);
+    border: 1px solid rgba(75,139,232,0.22);
+    color: #4b8be8;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.58rem; padding: 0.15rem 0.45rem;
+    border-radius: 3px; margin: 0.1rem;
+}
 /* Style Streamlit file uploader */
 [data-testid="stFileUploader"] {
     background: var(--surface) !important;
@@ -254,7 +273,9 @@ try:
     from ranker        import process_single_resume, collect_pdf_paths
     from domain_config import detect_domain
     PIPELINE_AVAILABLE = True
-except ImportError as e:
+except Exception as e:
+    # Catches ImportError AND MemoryError from torch/sentence_transformers
+    # on Python 3.14 where PyTorch is not yet supported.
     pipeline_error = str(e)
 
 
@@ -291,6 +312,17 @@ def normalize_result(r: dict) -> dict:
         except (TypeError, ValueError):
             r[key] = 0.0
     r["needs_review"] = bool(r.get("needs_review", False))
+    # Phase 2 / Phase 3 fields
+    if not r.get("location"):
+        r["location"] = None
+    if not isinstance(r.get("companies"), list):
+        r["companies"] = []
+    if not r.get("name_source"):
+        r["name_source"] = "unknown"
+    try:
+        r["name_confidence"] = float(r.get("name_confidence", 0))
+    except (TypeError, ValueError):
+        r["name_confidence"] = 0.0
     return r
 
 def get_output_files() -> list:
@@ -942,18 +974,39 @@ with tab1:
             col_l, col_m, col_r = st.columns([2, 1.5, 1.5])
 
             with col_l:
+                # NER source badge
+                name_src = r.get("name_source", "unknown")
+                name_conf = r.get("name_confidence", 0.0)
+                if name_src == "bert_ner":
+                    ner_cls, ner_lbl = "ner-bert",  "BERT NER"
+                elif name_src == "spacy_ner":
+                    ner_cls, ner_lbl = "ner-spacy", "spaCy NER"
+                else:
+                    ner_cls, ner_lbl = "ner-heur",  name_src.replace("_", " ").upper()
+
+                location  = r.get("location")
+                companies = r.get("companies", [])
+                loc_html  = f"<span style='color:#9b9baf;'>&#x25CE; {location}</span> &nbsp;" if location else ""
+                co_html   = "".join(f"<span class='company-chip'>{c}</span>" for c in companies[:4]) if companies else ""
+
                 st.markdown(f"""
                 <div style='font-family:DM Mono,monospace;font-size:0.62rem;
                             color:#6b6b80;'>RANK #{rank}</div>
                 <div style='font-family:Syne,sans-serif;font-size:1.15rem;
                             font-weight:700;color:#e8e8f0;margin:0.15rem 0;'>
-                    {name}</div>
-                <div style='font-family:DM Mono,monospace;font-size:0.65rem;
-                            color:#6b6b80;margin:0.3rem 0 0.8rem;'>
-                    {r.get("email","N/A")} &nbsp;·&nbsp; {r.get("phone","N/A")}
+                    {name}
+                    <span class='ner-badge {ner_cls}' title='Name extracted by: {name_src} (conf {name_conf:.2f})'>
+                        {ner_lbl} {name_conf:.0%}
+                    </span>
                 </div>
+                <div style='font-family:DM Mono,monospace;font-size:0.65rem;
+                            color:#6b6b80;margin:0.3rem 0 0.4rem;'>
+                    {r.get("email","N/A")} &nbsp;·&nbsp; {r.get("phone","N/A")}
+                    {"&nbsp;·&nbsp; " + loc_html if loc_html else ""}
+                </div>
+                {('<div style="margin-bottom:0.6rem;">' + co_html + '</div>') if co_html else ''}
                 <span class='decision-badge {d_class}'>{decision}</span>
-                {"<br><span class='review-flag' style='margin-top:0.4rem;display:inline-block;'>⚠ LOW PARSE CONFIDENCE</span>" if r.get("needs_review") else ""}
+                {"<br><span class='review-flag' style='margin-top:0.4rem;display:inline-block;'>&#x26A0; LOW PARSE CONFIDENCE</span>" if r.get("needs_review") else ""}
                 <div style='margin-top:1.2rem;'>
                 """, unsafe_allow_html=True)
 
@@ -1102,6 +1155,64 @@ with tab2:
             </div>
             """, unsafe_allow_html=True)
 
+    st.markdown("---")
+    st.markdown('<div class="section-header">NER LAYER INTELLIGENCE</div>',
+                unsafe_allow_html=True)
+
+    ner_bert  = sum(1 for r in filtered if r.get("name_source") == "bert_ner")
+    ner_spacy = sum(1 for r in filtered if r.get("name_source") == "spacy_ner")
+    ner_heur  = sum(1 for r in filtered if r.get("name_source") in ("first_line","regex_fallback"))
+    ner_fail  = sum(1 for r in filtered if r.get("name_source") in ("failed","unknown",""))
+    with_loc  = sum(1 for r in filtered if r.get("location"))
+    with_co   = sum(1 for r in filtered if r.get("companies"))
+
+    nc1, nc2, nc3, nc4, nc5, nc6 = st.columns(6)
+    for col, lbl, val, sub, color in [
+        (nc1, "BERT NER",    ner_bert,  "high conf · 0.95", "#4be8b8"),
+        (nc2, "spaCy NER",   ner_spacy, "layer 1 · 0.90",   "#e8b84b"),
+        (nc3, "HEURISTIC",   ner_heur,  "layer 2/3 · 0.60-0.75", "#6b6b80"),
+        (nc4, "UNRESOLVED",  ner_fail,  "name not found",   "#e84b6a"),
+        (nc5, "LOCATION",    with_loc,  "BERT LOC entity",  "#4b8be8"),
+        (nc6, "COMPANIES",   with_co,   "BERT ORG entities","#4b8be8"),
+    ]:
+        with col:
+            col.markdown(f"""
+            <div class='metric-card'>
+                <div class='metric-label'>{lbl}</div>
+                <div class='metric-value' style='font-size:1.5rem;color:{color};'>{val}</div>
+                <div class='metric-sub'>{sub}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # NER layer breakdown bar
+    total_n = len(filtered)
+    if total_n:
+        st.markdown("""
+        <div style='font-family:DM Mono,monospace;font-size:0.6rem;
+                    color:#6b6b80;margin:1rem 0 0.4rem;letter-spacing:0.1em;'>
+            NAME EXTRACTION LAYER DISTRIBUTION
+        </div>""", unsafe_allow_html=True)
+        for lbl, cnt, color in [
+            ("BERT NER (Layer 0)",      ner_bert,  "#4be8b8"),
+            ("spaCy NER (Layer 1)",     ner_spacy, "#e8b84b"),
+            ("Heuristic (Layer 2/3)",   ner_heur,  "#6b6b80"),
+            ("Unresolved",              ner_fail,  "#e84b6a"),
+        ]:
+            pct = cnt / total_n * 100
+            st.markdown(f"""
+            <div style='margin-bottom:0.5rem;'>
+                <div style='display:flex;justify-content:space-between;
+                            font-family:DM Mono,monospace;font-size:0.6rem;
+                            color:#6b6b80;margin-bottom:0.15rem;'>
+                    <span>{lbl}</span><span>{cnt} ({pct:.0f}%)</span>
+                </div>
+                <div class='score-bar-track'>
+                    <div style='height:100%;width:{pct:.1f}%;
+                                background:{color};border-radius:2px;'></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
 
 # ── TAB 3: EXPORT ─────────────────────────────────────────
 with tab3:
@@ -1113,8 +1224,12 @@ with tab3:
     export_rows = [{
         "Rank":             int(r.get("rank",0)),
         "Name":             r.get("name",""),
+        "NER Source":       r.get("name_source",""),
+        "Name Confidence":  round(r.get("name_confidence",0)*100, 0),
         "Email":            r.get("email",""),
         "Phone":            r.get("phone",""),
+        "Location":         r.get("location") or "",
+        "Companies":        ", ".join(r.get("companies",[])),
         "Final Score %":    round(r.get("final_score",0)*100, 1),
         "Semantic %":       round(r.get("semantic_score",0)*100, 1),
         "Skill %":          round(r.get("skill_score",0)*100, 1),

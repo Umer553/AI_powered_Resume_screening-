@@ -13,8 +13,9 @@ pytesseract                 # OCR wrapper for Tesseract
 
 
 # ── NLP & Named Entity Recognition ───────────────────────────
-spacy                       # NER for name extraction
+spacy                       # NER for name extraction (fallback layer)
 # After install run: python -m spacy download en_core_web_sm
+transformers>=4.40.0        # BERT-based NER (dslim/bert-base-NER) — primary name extractor
 
 
 # ── Embeddings & Semantic Similarity ─────────────────────────

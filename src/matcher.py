@@ -6,20 +6,21 @@ Integrates: semantic similarity, skill matching, experience scoring.
 
 import re
 import math
-from sentence_transformers import SentenceTransformer, util
 from skill_matcher import match_skills, extract_jd_skills
 from experience_extractor import ExperienceResult
 from domain_config import detect_domain
 
 # =========================================================
 # SINGLE SHARED MODEL INSTANCE
-# Lazy-loaded once — not reloaded per resume
+# Lazy-loaded on first use — sentence_transformers requires
+# torch which is not yet supported on Python 3.14.
 # =========================================================
 _model = None
 
-def get_model() -> SentenceTransformer:
+def get_model():
     global _model
     if _model is None:
+        from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
     return _model
 
@@ -33,6 +34,7 @@ def compute_semantic_score(resume_text: str, jd_text: str) -> float:
     Header/summary section carries most semantic signal.
     Returns float 0.0 - 1.0
     """
+    from sentence_transformers import util
     model = get_model()
     resume_chunk = resume_text[:1500]
     resume_emb   = model.encode(resume_chunk, convert_to_tensor=True)
