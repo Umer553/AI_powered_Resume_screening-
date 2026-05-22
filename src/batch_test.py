@@ -8,6 +8,7 @@ Usage:
     python batch_test.py --jd "path/to/jd.txt"
 """
 
+import env_loader  # noqa: F401 — must be first; loads .env before any local imports
 import os
 import sys
 import argparse
@@ -90,7 +91,7 @@ def parse_args():
         "--folder",
         type=str,
         default=DEFAULT_RESUME_FOLDER,
-        help="Path to resume folder (searches subfolders automatically)"
+        help="Path to resume folder (searches subfolders; accepts PDF, DOCX, JPG, PNG, BMP, TIFF)"
     )
     parser.add_argument(
         "--jd",

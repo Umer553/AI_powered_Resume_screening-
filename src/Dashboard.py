@@ -4,6 +4,7 @@ Place inside: src/dashboard.py
 Run from project root: streamlit run src/dashboard.py
 """
 
+import env_loader  # noqa: F401 — must be first; loads .env before any local imports
 import os
 import sys
 import json
@@ -270,7 +271,7 @@ PIPELINE_AVAILABLE = False
 pipeline_error     = None
 
 try:
-    from ranker        import process_single_resume, collect_pdf_paths
+    from ranker        import process_single_resume, collect_resume_paths
     from domain_config import detect_domain
     PIPELINE_AVAILABLE = True
 except Exception as e:
@@ -350,12 +351,14 @@ def to_df(results: list) -> pd.DataFrame:
         "Needs Review": r.get("needs_review", False),
     } for r in results])
 
+_RESUME_EXTENSIONS = {".pdf", ".docx", ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+
 def save_uploaded_resumes(uploaded_files: list) -> str:
     """
     Saves Streamlit uploaded file objects to a temp folder on disk.
+    Accepts PDF, Word (.docx), and image files.
     Returns the folder path for the pipeline to process.
     """
-    # Fresh temp folder each run — avoid mixing old and new resumes
     session_folder = os.path.join(
         TEMP_DIR,
         f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -364,7 +367,8 @@ def save_uploaded_resumes(uploaded_files: list) -> str:
 
     saved = []
     for uploaded_file in uploaded_files:
-        if uploaded_file.name.lower().endswith(".pdf"):
+        ext = os.path.splitext(uploaded_file.name.lower())[1]
+        if ext in _RESUME_EXTENSIONS:
             dest = os.path.join(session_folder, uploaded_file.name)
             with open(dest, "wb") as f:
                 f.write(uploaded_file.getbuffer())
@@ -383,12 +387,12 @@ def extract_jd_from_upload(uploaded_file) -> str:
     name = uploaded_file.name.lower()
 
     if name.endswith(".txt"):
-        return uploaded_file.read().decode("utf-8", errors="ignore")
+        return uploaded_file.getvalue().decode("utf-8", errors="ignore")
 
     if name.endswith(".pdf"):
         try:
             import pdfplumber, io
-            with pdfplumber.open(io.BytesIO(uploaded_file.read())) as pdf:
+            with pdfplumber.open(io.BytesIO(uploaded_file.getvalue())) as pdf:
                 text = ""
                 for page in pdf.pages:
                     page_text = page.extract_text()
@@ -668,23 +672,28 @@ if mode == "Screen New Resumes":
         st.markdown("""
         <div class='upload-label'>Resume Files</div>
         <div class='upload-info'>
-            Accepts .pdf &nbsp;·&nbsp; Upload multiple files<br>
+            Accepts .pdf · .docx · .jpg · .png · .bmp · .tiff &nbsp;·&nbsp; Upload multiple files<br>
             All uploaded resumes will be screened and ranked
         </div>
         """, unsafe_allow_html=True)
 
         resume_files = st.file_uploader(
             "Upload Resumes",
-            type=["pdf"],
+            type=[
+                "pdf",
+                "docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "jpg", "jpeg", "png", "bmp", "tiff",
+            ],
             accept_multiple_files=True,
             label_visibility="collapsed",
             key="resume_uploader"
         )
 
         if resume_files:
-            pdf_count = len([f for f in resume_files if f.name.lower().endswith(".pdf")])
+            file_count = len(resume_files)
             st.markdown(f"""
-            <div class='upload-success'>✓ {pdf_count} PDF(s) ready to screen</div>
+            <div class='upload-success'>✓ {file_count} file(s) ready to screen</div>
             <div style='font-family:DM Mono,monospace;font-size:0.62rem;
                         color:#6b6b80;margin-top:0.5rem;max-height:120px;
                         overflow-y:auto;'>
@@ -711,7 +720,7 @@ if mode == "Screen New Resumes":
             st.markdown("""
             <div style='font-family:DM Mono,monospace;font-size:0.68rem;
                         color:#e8b84b;padding-top:0.6rem;'>
-                ⚠ Upload at least one resume PDF
+                ⚠ Upload at least one resume (PDF, DOCX, or image)
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -727,7 +736,7 @@ if mode == "Screen New Resumes":
         if not jd_text.strip():
             st.error("Please upload or paste a job description.")
         elif not resume_files:
-            st.error("Please upload at least one resume PDF.")
+            st.error("Please upload at least one resume (PDF, DOCX, or image).")
         else:
             status   = st.empty()
             prog_bar = st.progress(0)
@@ -753,7 +762,7 @@ if mode == "Screen New Resumes":
                 total = len(saved_paths)
 
                 if total == 0:
-                    st.error("No valid PDF files found in upload.")
+                    st.error("No supported resume files found in upload.")
                     st.stop()
 
                 status.markdown(f"""
@@ -776,7 +785,7 @@ if mode == "Screen New Resumes":
                     prog_bar.progress(pct)
 
                     result = process_single_resume(
-                        pdf_path      = pdf_path,
+                        file_path     = pdf_path,
                         jd_text       = jd_text,
                         domain_name   = domain_name,
                         domain_config = domain_config,

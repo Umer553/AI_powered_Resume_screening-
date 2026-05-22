@@ -4,6 +4,7 @@ from pdf2image import convert_from_path
 import re
 from difflib import SequenceMatcher
 from dataclasses import dataclass
+from pathlib import Path
 
 # ---------------------------------------------------------
 # Configure paths (Windows)
@@ -255,3 +256,126 @@ def extract_text_from_pdf(pdf_path) -> ParsedDocument:
         confidence=confidence,
         page_count=page_count
     )
+
+
+# =========================================================
+# 7) WORD DOCUMENT PARSER (.docx)
+# =========================================================
+def extract_text_from_docx(docx_path: str) -> ParsedDocument:
+    """
+    Extracts text from a .docx Word document.
+    Covers paragraphs, tables, and section headers/footers.
+    Returns ParsedDocument with extraction_method="docx".
+    Note: python-docx has no page count API; page_count is set to 1.
+    """
+    from docx import Document
+
+    doc = Document(docx_path)
+    parts = []
+
+    for para in doc.paragraphs:
+        t = para.text.strip()
+        if t:
+            parts.append(t)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                t = cell.text.strip()
+                if t:
+                    parts.append(t)
+
+    for section in doc.sections:
+        for hf in (section.header, section.footer):
+            try:
+                if not hf.is_linked_to_previous:
+                    for para in hf.paragraphs:
+                        t = para.text.strip()
+                        if t:
+                            parts.append(t)
+            except Exception:
+                pass
+
+    raw_text = "\n".join(parts)
+    text = clean_text(raw_text)
+    _, confidence = assess_text_quality(text)
+
+    return ParsedDocument(
+        text=text,
+        extraction_method="docx",
+        confidence=confidence,
+        page_count=1,
+    )
+
+
+# =========================================================
+# 8) IMAGE PARSER (.jpg, .png, .bmp, .tiff, etc.)
+# =========================================================
+def extract_text_from_image(image_path: str) -> ParsedDocument:
+    """
+    Extracts text from a resume image via Tesseract OCR.
+    Preprocessing: grayscale conversion + Otsu binarization.
+    Returns ParsedDocument with extraction_method="image_ocr".
+    """
+    from PIL import Image, ImageOps, ImageFilter
+
+    img = Image.open(image_path)
+
+    if img.mode != "L":
+        img = img.convert("L")
+
+    # Upscale small images to give Tesseract better resolution
+    w, h = img.size
+    if w < 1200:
+        scale = 1200 / w
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    # Light sharpening improves character edges
+    img = img.filter(ImageFilter.SHARPEN)
+
+    custom_config = r"--oem 3 --psm 6"
+    raw_text = pytesseract.image_to_string(img, lang="eng", config=custom_config)
+
+    text = clean_ocr_noise(raw_text)
+    text = clean_text(text)
+    _, confidence = assess_text_quality(text)
+
+    return ParsedDocument(
+        text=text,
+        extraction_method="image_ocr",
+        confidence=confidence,
+        page_count=1,
+    )
+
+
+# =========================================================
+# 9) UNIVERSAL ROUTER — dispatches by file extension
+# =========================================================
+_EXTENSION_MAP = {
+    ".pdf":  extract_text_from_pdf,
+    ".docx": extract_text_from_docx,
+    ".jpg":  extract_text_from_image,
+    ".jpeg": extract_text_from_image,
+    ".png":  extract_text_from_image,
+    ".bmp":  extract_text_from_image,
+    ".tiff": extract_text_from_image,
+    ".tif":  extract_text_from_image,
+    ".webp": extract_text_from_image,
+}
+
+SUPPORTED_EXTENSIONS = set(_EXTENSION_MAP.keys())
+
+
+def extract_text(file_path: str) -> ParsedDocument:
+    """
+    Universal entry point. Routes to the correct parser based on extension.
+    Raises ValueError for unsupported file types.
+    """
+    ext = Path(file_path).suffix.lower()
+    parser = _EXTENSION_MAP.get(ext)
+    if parser is None:
+        raise ValueError(
+            f"Unsupported file format '{ext}'. "
+            f"Supported: {sorted(SUPPORTED_EXTENSIONS)}"
+        )
+    return parser(file_path)

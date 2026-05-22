@@ -2,6 +2,8 @@ import os
 import re
 import requests
 from dataclasses import dataclass
+from rapidfuzz import fuzz
+import env_loader  # noqa: F401 — loads .env into os.environ before any reads below
 
 # ── HuggingFace Serverless Inference API ─────────────────────────────────────
 # Model : dslim/bert-base-NER (BERT-base fine-tuned on CoNLL-2003)
@@ -50,35 +52,123 @@ ORG_REJECT = {
 
 # ── Rejection blocklist (expanded) ───────────────────────────────
 REJECT_WORDS = {
-    # Technical skills
+    # Technical skills / frameworks
     "python", "tensorflow", "pytorch", "keras", "opencv", "numpy", "pandas",
     "matplotlib", "seaborn", "docker", "git", "fastapi", "flask", "sql",
     "nlp", "mlops", "transformers", "machine", "learning", "deep", "data",
     "analysis", "science", "html", "css", "javascript", "java", "scala",
+    "react", "angular", "node", "express", "spring", "boot", "django",
+    "kubernetes", "hadoop", "spark", "kafka", "tableau", "excel", "powerbi",
+    "api", "apis", "rest", "graphql", "grpc", "microservices",
+    # Technical concepts that title-case into name-like strings
+    "computer", "vision", "processing", "mining", "forecasting",
+    "recommendation", "detection", "recognition", "classification",
+    "regression", "automation", "optimization", "pipeline", "deployment",
+    "integration", "engine", "engines", "natural", "language", "generation",
+    "translation", "summarization", "text", "sales", "power",
+    "analytics", "intelligence", "artificial", "network", "networks",
+    "algorithm", "algorithms", "model", "models", "system", "systems",
+    "application", "applications", "solution", "solutions", "software",
+    "database", "databases", "architecture", "framework", "frameworks",
+    "development", "testing", "quality", "assurance", "security",
+    "infrastructure", "services", "service", "platform", "tool", "tools",
     # Resume section headers
     "skills", "experience", "education", "projects", "summary", "profile",
     "objective", "contact", "references", "certifications", "achievements",
     "languages", "interests", "hobbies", "awards", "publications",
-    # Job titles (spaCy confuses these with names)
+    "portfolio", "work", "history", "background", "overview",
+    # Job titles
     "engineer", "developer", "scientist", "analyst", "manager", "director",
     "consultant", "architect", "intern", "lead", "senior", "junior",
+    "researcher", "specialist", "coordinator", "supervisor", "officer",
+    "executive", "associate", "freelancer", "entrepreneur", "coder",
+    "technician", "administrator", "designer", "tester", "trainer",
+    "head", "chief", "president", "founder", "co-founder",
     # Institutions / generic
     "university", "institute", "college", "school", "certified", "bachelor",
-    "master", "degree", "gpa", "cgpa",
+    "master", "degree", "gpa", "cgpa", "phd", "msc", "bsc",
+    # Company suffixes
+    "llc", "inc", "ltd", "corp", "corporation", "plc", "gmbh", "pvt",
+    # Common Pakistani / South Asian cities (appear in address lines)
+    "islamabad", "rawalpindi", "lahore", "karachi", "peshawar",
+    "multan", "faisalabad", "hyderabad", "quetta", "gujranwala",
+    "sialkot", "bahawalpur", "pakistan", "punjab", "sindh",
     # Common false positives
     "resume", "curriculum", "vitae", "page", "phone", "email", "github",
-    "linkedin", "address", "nationality", "present", "current"
+    "linkedin", "address", "nationality", "present", "current",
+    "available", "seeking", "looking", "based", "located",
 }
 
 
 # ── Confidence levels for name extraction ────────────────────────
 NAME_CONFIDENCE = {
-    "bert_ner":       0.95,   # dslim/bert-base-NER (pretrained, highest accuracy)
-    "spacy_ner":      0.90,
-    "first_line":     0.75,
-    "regex_fallback": 0.60,
-    "failed":         0.00,
+    "bert_ner_anchored": 0.97,   # BERT PER + corroborated by email/LinkedIn/filename
+    "bert_ner":          0.95,   # dslim/bert-base-NER (pretrained, highest accuracy)
+    "spacy_ner":         0.90,
+    "first_line":        0.75,
+    "regex_fallback":    0.60,
+    "failed":            0.00,
 }
+
+
+# ── Anchor-token helpers (used to disambiguate BERT PER candidates) ───
+# A real candidate's name almost always echoes in the email local-part,
+# the LinkedIn slug, and/or the PDF filename. We fuzzy-match BERT-detected
+# names against these "anchor" tokens to pick the right person from a
+# document that may also mention referees, managers, or collaborators.
+_ANCHOR_STOPWORDS = {
+    "resume", "cv", "curriculum", "vitae",
+    "final", "latest", "updated", "new", "draft",
+    "info", "admin", "noreply", "no-reply", "contact", "hello",
+    "mail", "email", "gmail", "yahoo", "hotmail", "outlook",
+}
+
+
+def _split_anchor(s: str) -> list[str]:
+    """Split on . _ - / whitespace, lowercase, drop digits/stopwords/short tokens."""
+    if not s:
+        return []
+    parts = re.split(r"[._\-/\s]+", s.lower())
+    out = []
+    for p in parts:
+        p = re.sub(r"\d+", "", p).strip()
+        if len(p) >= 3 and p not in _ANCHOR_STOPWORDS:
+            out.append(p)
+    return out
+
+
+def _build_anchor_tokens(email: str | None, linkedin: str | None,
+                         pdf_filename: str | None) -> list[str]:
+    """Collect tokens from email local-part, LinkedIn slug, filename stem."""
+    tokens: list[str] = []
+    if email:
+        tokens += _split_anchor(email.split("@")[0])
+    if linkedin:
+        slug = linkedin.rstrip("/").split("/")[-1]
+        tokens += _split_anchor(slug)
+    if pdf_filename:
+        stem = re.sub(r"\.[^.]+$", "", pdf_filename)
+        tokens += _split_anchor(stem)
+    return tokens
+
+
+def _score_per_candidate(name: str, anchors: list[str],
+                         bert_score: float, window_idx: int,
+                         frequency: int, max_freq: int) -> float:
+    """
+    Composite 0–1 score for a BERT PER candidate.
+    Weights: anchor sim 0.55, BERT conf 0.20, position 0.15, frequency 0.10.
+    """
+    name_parts = _split_anchor(name)
+    if not name_parts or not anchors:
+        anchor_sim = 0.0
+    else:
+        per_part = [max(fuzz.ratio(p, a) for a in anchors) for p in name_parts]
+        per_part.sort(reverse=True)
+        anchor_sim = sum(per_part[:2]) / (100 * min(2, len(per_part)))
+    pos = max(0.0, 1.0 - (window_idx * 0.25))
+    freq = (frequency / max_freq) if max_freq else 0.0
+    return 0.55 * anchor_sim + 0.20 * bert_score + 0.15 * pos + 0.10 * freq
 
 
 @dataclass
@@ -160,16 +250,17 @@ def _bert_call(text_chunk: str) -> list:
         return []
 
 
-def _merge_per_entities(entities: list) -> str | None:
+def _per_groups(entities: list) -> list[tuple[str, float]]:
     """
-    Merge consecutive PER tokens into one name.
+    Merge consecutive PER tokens into name groups and return all of them.
     BERT sometimes splits 'Gail L. Lugo' into ['Gail L', 'Lugo'] —
     adjacent PER entities within 5 chars of each other are joined.
+    Returns list of (merged_name, avg_score) for every distinct PER group.
     """
     per = [e for e in entities
            if e.get("entity_group") == "PER" and e.get("score", 0) >= 0.85]
     if not per:
-        return None
+        return []
 
     per.sort(key=lambda e: e.get("start", 0))
 
@@ -185,9 +276,22 @@ def _merge_per_entities(entities: list) -> str | None:
             current = [ent]
     groups.append(current)
 
-    best = max(groups, key=lambda g: sum(e["score"] for e in g) / len(g))
-    merged = " ".join(e.get("word", "").strip() for e in best)
-    return merged.strip() if merged.strip() else None
+    out = []
+    for g in groups:
+        merged = " ".join(e.get("word", "").strip() for e in g).strip()
+        if merged:
+            avg_score = sum(e["score"] for e in g) / len(g)
+            out.append((merged, avg_score))
+    return out
+
+
+def _merge_per_entities(entities: list) -> str | None:
+    """Backward-compatible wrapper — returns the single highest-score group."""
+    groups = _per_groups(entities)
+    if not groups:
+        return None
+    best = max(groups, key=lambda g: g[1])
+    return best[0]
 
 
 def extract_name_bert(text: str) -> str | None:
@@ -292,10 +396,13 @@ def _extract_location(entities: list) -> str | None:
 def extract_entities_bert(text: str) -> dict:
     """
     Phase 2: Multi-entity BERT extraction in one pass.
-    Returns PER (candidate name), ORGs (employer list), and LOC (location).
+    Returns PER (candidate name), ORGs (employer list), LOC (location), and
+    per_candidates — the full list of valid PER groups across all windows so
+    callers can corroborate against email / LinkedIn / filename anchors.
 
     Strategy per entity type:
-    - PER  : stop at first window that yields a valid name (same as extract_name_bert)
+    - PER  : collect ALL valid groups across all windows (with score + window idx).
+             `per` still holds the *first* valid hit (legacy behavior).
     - ORG  : scan ALL windows and accumulate unique employers across work history
     - LOC  : take first match from early windows (location is in the header)
 
@@ -303,7 +410,7 @@ def extract_entities_bert(text: str) -> dict:
     Max 4 API calls per resume — all results reused, no redundant calls.
     """
     if not _HF_TOKEN:
-        return {"per": None, "orgs": [], "location": None}
+        return {"per": None, "per_candidates": [], "orgs": [], "location": None}
 
     windows = [
         text[0:512],
@@ -312,22 +419,31 @@ def extract_entities_bert(text: str) -> dict:
         text[2000:2512],
     ]
 
-    per_name  = None
-    all_orgs  = []
-    location  = None
-    seen_orgs = set()
+    per_name        = None
+    per_candidates  = []   # list[(name, bert_score, window_idx)]
+    seen_per        = set()
+    all_orgs        = []
+    location        = None
+    seen_orgs       = set()
 
-    for chunk in windows:
+    for w_idx, chunk in enumerate(windows):
         if not chunk.strip():
             continue
 
         entities = _bert_call(chunk)
 
-        # PER — stop scanning once found
-        if per_name is None:
-            candidate = _merge_per_entities(entities)
-            if candidate and is_valid_name(candidate):
-                per_name = candidate.title()
+        # PER — collect every valid group from this window
+        for raw_name, score in _per_groups(entities):
+            if not is_valid_name(raw_name):
+                continue
+            titled = raw_name.title()
+            key = titled.lower()
+            if key in seen_per:
+                continue
+            seen_per.add(key)
+            per_candidates.append((titled, score, w_idx))
+            if per_name is None:
+                per_name = titled
 
         # ORG — accumulate from all windows (employers span entire document)
         for org in _extract_orgs(entities):
@@ -340,9 +456,10 @@ def extract_entities_bert(text: str) -> dict:
             location = _extract_location(entities)
 
     return {
-        "per":      per_name,
-        "orgs":     all_orgs[:5],   # cap at 5 most prominent employers
-        "location": location,
+        "per":            per_name,
+        "per_candidates": per_candidates,
+        "orgs":           all_orgs[:5],
+        "location":       location,
     }
 
 
@@ -486,41 +603,94 @@ def extract_name_ner(text: str) -> ExtractedName:
     return ExtractedName(value=None, confidence=0.0, source="failed")
 
 
-def extract_all_contact_info(text: str) -> dict:
+def extract_all_contact_info(text: str, pdf_filename: str | None = None) -> dict:
     """
     Single call to extract all contact fields + BERT multi-entity results.
     Used by information_extractor.py.
 
     When HF_API_TOKEN is set, runs extract_entities_bert() once and reuses
-    the PER result for name extraction (avoids a redundant API call).
+    the PER candidates for name extraction (avoids a redundant API call).
+    The chosen name is disambiguated against email local-part, LinkedIn slug,
+    and PDF filename so that referees / managers / collaborators mentioned in
+    the resume body do not win over the actual candidate.
     Falls back to the 4-layer heuristic pipeline when token is absent.
     """
-    if _HF_TOKEN:
-        # One multi-entity BERT call covers PER + ORG + LOC together
-        bert_result = extract_entities_bert(text)
-        per_name = bert_result["per"]
+    # Compute contact info first — these double as anchors for name selection.
+    email    = extract_email(text)
+    phone    = extract_phone(text)
+    linkedin = extract_linkedin(text)
+    github   = extract_github(text)
 
-        if per_name:
-            name_result = ExtractedName(
-                value=per_name,
-                confidence=NAME_CONFIDENCE["bert_ner"],
-                source="bert_ner",
-            )
-        else:
-            # BERT found no name — fall through to spaCy + heuristics
+    if _HF_TOKEN:
+        bert_result    = extract_entities_bert(text)
+        per_candidates = list(bert_result.get("per_candidates", []))
+        anchors        = _build_anchor_tokens(email, linkedin, pdf_filename)
+
+        # BERT misses standalone names at the resume top (no sentence context) but
+        # correctly tags names in body sentences like "Manager Bob Johnson" — which
+        # then win incorrectly. Inject the first-line name as a synthetic candidate
+        # so anchor scoring can pick the right person.
+        first_line_name = extract_name_first_line(text)
+        if first_line_name:
+            existing = {n.lower() for n, _, _ in per_candidates}
+            if first_line_name.lower() not in existing:
+                per_candidates.append((first_line_name.title(), 0.75, 0))
+
+        name_result = None
+        if per_candidates and anchors:
+            # Anchor-corroborated selection.
+            max_freq = max(
+                (text.lower().count(n.lower()) for n, _, _ in per_candidates),
+                default=1,
+            ) or 1
+            scored = []
+            for name, bscore, w_idx in per_candidates:
+                freq = text.lower().count(name.lower())
+                composite = _score_per_candidate(
+                    name, anchors, bscore, w_idx, freq, max_freq
+                )
+                scored.append((composite, name, bscore, w_idx))
+            scored.sort(reverse=True)
+            best_composite, best_name, _, _ = scored[0]
+            if best_composite >= 0.35:
+                name_result = ExtractedName(
+                    value=best_name,
+                    confidence=NAME_CONFIDENCE["bert_ner_anchored"],
+                    source="bert_ner_anchored",
+                )
+
+        if name_result is None:
+            # No anchors or no candidate cleared threshold.
+            # Prefer first-line over raw BERT first-hit: BERT picks up sentence-context
+            # names (managers, referees) before standalone candidate names.
+            if first_line_name:
+                name_result = ExtractedName(
+                    value=first_line_name.title(),
+                    confidence=NAME_CONFIDENCE["first_line"],
+                    source="first_line",
+                )
+            elif bert_result.get("per"):
+                name_result = ExtractedName(
+                    value=bert_result["per"],
+                    confidence=NAME_CONFIDENCE["bert_ner"],
+                    source="bert_ner",
+                )
+
+        if name_result is None:
+            # BERT found no usable name — fall through to spaCy + heuristics.
             name_result = _fallback_name_extraction(text)
     else:
-        bert_result = {"per": None, "orgs": [], "location": None}
+        bert_result = {"per": None, "per_candidates": [], "orgs": [], "location": None}
         name_result = _fallback_name_extraction(text)
 
     return {
         "name":            name_result.value,
         "name_confidence": name_result.confidence,
         "name_source":     name_result.source,
-        "email":           extract_email(text),
-        "phone":           extract_phone(text),
-        "linkedin":        extract_linkedin(text),
-        "github":          extract_github(text),
+        "email":           email,
+        "phone":           phone,
+        "linkedin":        linkedin,
+        "github":          github,
         # Phase 2: new BERT-extracted fields
         "location":        bert_result["location"],
         "companies":       bert_result["orgs"],

@@ -9,8 +9,9 @@ import json
 import csv
 from datetime import datetime
 from dataclasses import dataclass
+from pathlib import Path
 
-from pdf_parser            import extract_text_from_pdf
+from pdf_parser            import extract_text, SUPPORTED_EXTENSIONS
 from information_extractor import extract_candidate_info
 from experience_extractor  import extract_work_experience
 from matcher               import compute_match_score, hiring_decision
@@ -62,20 +63,19 @@ class CandidateResult:
 
 
 # =========================================================
-# PDF COLLECTOR — recursive subfolder walk
+# RESUME COLLECTOR — recursive subfolder walk
 # =========================================================
-def collect_pdf_paths(resume_folder: str) -> list:
+def collect_resume_paths(resume_folder: str) -> list:
     """
-    Finds all PDFs recursively.
-    Handles: resumes/data/ML_ENGINEER/*.pdf
-             resumes/data/TEACHER/*.pdf  etc.
+    Finds all supported resume files recursively (PDF, DOCX, images).
+    Handles: resumes/data/ML_ENGINEER/*.pdf  etc.
     """
-    pdf_paths = []
+    paths = []
     for root, dirs, files in os.walk(resume_folder):
         for file in files:
-            if file.lower().endswith(".pdf"):
-                pdf_paths.append(os.path.join(root, file))
-    return pdf_paths
+            if Path(file).suffix.lower() in SUPPORTED_EXTENSIONS:
+                paths.append(os.path.join(root, file))
+    return paths
 
 
 # =========================================================
@@ -83,24 +83,28 @@ def collect_pdf_paths(resume_folder: str) -> list:
 # Called by both rank_resumes() and dashboard.py directly
 # =========================================================
 def process_single_resume(
-    pdf_path:      str,
+    file_path:     str,
     jd_text:       str,
     domain_name:   str,
     domain_config: dict,
 ) -> CandidateResult | None:
     """
-    Full pipeline for one resume.
+    Full pipeline for one resume (PDF, DOCX, or image).
     Returns None on failure — batch continues uninterrupted.
     """
     try:
-        # Step 1: Parse PDF
-        parsed = extract_text_from_pdf(pdf_path)
+        # Step 1: Parse document
+        parsed = extract_text(file_path)
         if not parsed.text or len(parsed.text.strip()) < 50:
-            print(f"  ⚠ Skipping {os.path.basename(pdf_path)} — insufficient text")
+            print(f"  ⚠ Skipping {os.path.basename(file_path)} — insufficient text")
             return None
 
         # Step 2: Extract candidate info
-        info = extract_candidate_info(parsed.text, parsed.confidence)
+        info = extract_candidate_info(
+            parsed.text,
+            parsed.confidence,
+            pdf_filename=os.path.basename(file_path),
+        )
 
         # Step 3: Extract experience
         exp_result = extract_work_experience(parsed.text)
@@ -147,14 +151,14 @@ def process_single_resume(
             domain             = match["domain"],
             scoring_weights    = match["scoring_weights_used"],
             decision           = decision,
-            file_path          = pdf_path,
+            file_path          = file_path,
             parse_method       = parsed.extraction_method,
             parse_confidence   = parsed.confidence,
             needs_review       = info.get("needs_review", False),
         )
 
     except Exception as e:
-        print(f"  ❌ Failed: {os.path.basename(pdf_path)} — {e}")
+        print(f"  ❌ Failed: {os.path.basename(file_path)} — {e}")
         return None
 
 
@@ -191,22 +195,22 @@ def rank_resumes(
     print(f"  Weights  : {domain_config['scoring_weights']}")
     print("="*55 + "\n")
 
-    # ── Step 2: Collect PDFs ──────────────────────────────
-    pdf_paths = collect_pdf_paths(resume_folder)
-    total     = len(pdf_paths)
+    # ── Step 2: Collect resumes ───────────────────────────
+    resume_paths = collect_resume_paths(resume_folder)
+    total        = len(resume_paths)
 
     if total == 0:
-        print(f"⚠ No PDFs found in: {resume_folder}")
+        print(f"⚠ No supported resume files found in: {resume_folder}")
         return []
 
     print(f"📂 Found {total} resumes — processing...\n")
 
     # ── Step 3: Process each resume ───────────────────────
     results = []
-    for i, path in enumerate(pdf_paths, 1):
+    for i, path in enumerate(resume_paths, 1):
         print(f"[{i:>4}/{total}] {os.path.basename(path)}")
         result = process_single_resume(
-            pdf_path      = path,
+            file_path     = path,
             jd_text       = job_description,
             domain_name   = domain_name,
             domain_config = domain_config,

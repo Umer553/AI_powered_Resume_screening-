@@ -117,11 +117,16 @@ def extract_experience_fallback(text: str) -> float:
 # =========================================================
 # MASTER FUNCTION
 # =========================================================
-def extract_candidate_info(text: str, parsed_confidence: float = 1.0) -> dict:
+def extract_candidate_info(text: str,
+                           parsed_confidence: float = 1.0,
+                           pdf_filename: str | None = None) -> dict:
     """
     Orchestrates all extraction.
     Now accepts parsed_confidence from pdf_parser's ParsedDocument
     and passes it through to the final result.
+
+    `pdf_filename` (basename only — no path) is forwarded to ner_extractor
+    so the candidate's name can be corroborated against the filename.
 
     experience_years here is FALLBACK only.
     Accurate experience is calculated in experience_extractor.py
@@ -131,7 +136,7 @@ def extract_candidate_info(text: str, parsed_confidence: float = 1.0) -> dict:
         return _empty_result()
 
     # ── Contact info (from updated ner_extractor) ─────────
-    contact = extract_all_contact_info(text)
+    contact = extract_all_contact_info(text, pdf_filename=pdf_filename)
 
     # ── Skills ────────────────────────────────────────────
     skills = extract_skills(text)

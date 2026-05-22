@@ -11,6 +11,10 @@ pymupdf                     # fallback PDF parsing (fitz)
 pdf2image                   # converts PDF pages to images for OCR
 pytesseract                 # OCR wrapper for Tesseract
 
+# ── Word & Image Parsing ──────────────────────────────────────
+python-docx                 # Word (.docx) document text extraction
+Pillow                      # image loading for resume image OCR
+
 
 # ── NLP & Named Entity Recognition ───────────────────────────
 spacy                       # NER for name extraction (fallback layer)
@@ -43,6 +47,9 @@ plotly                      # radar charts, histograms, donut charts
 
 # ── HTTP (LLM domain detection fallback) ─────────────────────
 requests                    # Anthropic API call in domain_config.py
+
+# ── Environment variables ─────────────────────────────────────
+python-dotenv               # loads .env file into os.environ at startup
 
 
 # ── Standard Library (no install needed) ─────────────────────

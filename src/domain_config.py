@@ -1,7 +1,9 @@
+import os
 import re
 import json
 import requests
 from rapidfuzz import fuzz
+import env_loader  # noqa: F401 — loads .env into os.environ
 
 # =========================================================
 # BUILT-IN DOMAIN CONFIGS (your known categories)
@@ -268,7 +270,7 @@ def detect_domain_llm(jd_text: str) -> tuple[str, dict]:
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
-                "x-api-key":         "YOUR_API_KEY_HERE",
+                "x-api-key":         os.environ.get("ANTHROPIC_API_KEY", ""),
                 "anthropic-version": "2023-06-01",
                 "content-type":      "application/json",
             },
